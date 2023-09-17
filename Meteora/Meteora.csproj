@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="glfw.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+
+	
+
+  <ItemGroup>
+    <PackageReference Include="glfw-net" Version="3.3.1" />
+    <PackageReference Include="VulkanSharp" Version="0.1.10" />
+  </ItemGroup>
+
+
+	
+
+  <ItemGroup>
+    <Folder Include="Shaders\bin\" />
+    <Folder Include="Shaders\src\" />
+  </ItemGroup>
+
+</Project>
