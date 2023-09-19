@@ -28,6 +28,12 @@ public class MeteoraApp : IDisposable
 	private Format _curSwapChainFormat;
 	private Extent2D _curSwapChainExtent;
 	private ImageView[]? _swapchainImageViews;
+	private PipelineLayout? _pipelineLayout;
+	private RenderPass? _renderPass;
+	private Pipeline? _graphicsPipeline;
+	private Framebuffer[]? _framebuffers;
+	private CommandPool? _commandPool;
+	private CommandBuffer? _commandBuffer;
 
 	private readonly string[] _validationLayers = new[]
 	{
@@ -59,7 +65,7 @@ public class MeteoraApp : IDisposable
 		SetupDebugMessenger(_instance);
 #endif
 		_surface = PrepareSurface(_instance);
-		
+
 		//Device
 		_physicalDevice = PickPhysicalDevice(_instance, _surface);
 		var indexFamilies = _physicalDevice.FindQueueFamilies(_surface);
@@ -68,9 +74,18 @@ public class MeteoraApp : IDisposable
 		_presentQueue = _device.GetQueue((uint)indexFamilies.presentation!, 0);
 
 		//Swapchain
-		(_swapchain, _swapImages, _curSwapChainFormat, _curSwapChainExtent) = CreateSwapChain(_physicalDevice, _surface, _device);
+		(_swapchain, _curSwapChainFormat, _curSwapChainExtent) = CreateSwapChain(_physicalDevice, _surface, _device);
+		_swapImages = _device.GetSwapchainImagesKHR(_swapchain);
 		_swapchainImageViews = CreateImageViews(_device, _swapImages);
-		CreateGraphicsPipeline();
+		
+		//Graphics Pipeline
+		_renderPass = CreateRenderPass(_device, _curSwapChainFormat);
+		(_pipelineLayout, _graphicsPipeline) = CreateGraphicsPipeline(_device, _curSwapChainExtent, _renderPass);
+
+		//Drawing
+		_framebuffers = CreateFrameBuffers(_device, _swapchainImageViews, _renderPass, _curSwapChainExtent);
+		_commandPool = CreateCommandPool(_device, indexFamilies);
+		_commandBuffer = CreateCommandBuffer(_device, _commandPool);
 	}
 
 	private SurfaceKhr PrepareSurface(Instance instance)
@@ -85,10 +100,282 @@ public class MeteoraApp : IDisposable
 		return surface;
 	}
 
+	#region Drawing
+
+	private static Framebuffer[] CreateFrameBuffers(Device device, ImageView[] swapchainViews, RenderPass renderPass, Extent2D extent)
+	{
+		var swapchainBuffers = new Framebuffer[swapchainViews.Length];
+
+		for (int i = 0; i < swapchainViews.Length; i++)
+		{
+			var attachements = new[] { swapchainViews[i] };
+			var frameBufferInfo = new FramebufferCreateInfo
+			{
+				RenderPass = renderPass,
+				AttachmentCount = 1,
+				Attachments = attachements,
+				Width = extent.Width,
+				Height = extent.Height,
+				Layers = 1
+			};
+
+			swapchainBuffers[i] = device.CreateFramebuffer(frameBufferInfo);
+		}
+
+		return swapchainBuffers;
+	}
+
+	private static CommandPool CreateCommandPool(Device device, QueueFamilyIndices indices)
+	{
+		var poolInfo = new CommandPoolCreateInfo
+		{
+			QueueFamilyIndex = (uint)indices.graphics!,
+			Flags = CommandPoolCreateFlags.ResetCommandBuffer
+		};
+
+		var commandPool = device.CreateCommandPool(poolInfo);
+		return commandPool;
+	}
+
+	private static CommandBuffer CreateCommandBuffer(Device device, CommandPool commandPool)
+	{
+		var allocInfo = new CommandBufferAllocateInfo
+		{
+			CommandPool = commandPool,
+			CommandBufferCount = 1,
+			Level = CommandBufferLevel.Primary
+		};
+
+		return device.AllocateCommandBuffers(allocInfo).First();
+	}
+
+	private void RecordCommandBuffer(CommandBuffer commandBuffer, Framebuffer framebuffer, RenderPass renderPass, Extent2D extent, Pipeline graphicsPipeline)
+	{
+		var beginInfo = new CommandBufferBeginInfo
+		{
+		};
+
+		commandBuffer.Begin(beginInfo);
+
+		var clearvalue = new ClearValue
+		{
+			Color = new ClearColorValue
+			{
+				Float32 = new[] { 0f, 0f, 0f, 1f }
+			}
+		};
+
+		var renderPassInfo = new RenderPassBeginInfo
+		{
+			RenderPass = renderPass,
+			Framebuffer = framebuffer,
+			RenderArea = new Rect2D { Offset = new Offset2D(), Extent = extent },
+			ClearValueCount = 1,
+			ClearValues = new[] { clearvalue }
+		};
+
+		commandBuffer.CmdBeginRenderPass(renderPassInfo, SubpassContents.Inline);
+		commandBuffer.CmdBindPipeline(PipelineBindPoint.Graphics, graphicsPipeline);
+
+		var viewport = new Viewport
+		{
+			X = 0,
+			Y = 0,
+			Width = extent.Width,
+			Height = extent.Height,
+			MinDepth = 0,
+			MaxDepth = 1,
+		};
+
+		commandBuffer.CmdSetViewport(0, viewport);
+
+		var scissor = new Rect2D
+		{
+			Extent = extent,
+			Offset = new Offset2D()
+		};
+
+		commandBuffer.CmdSetScissor(0, scissor);
+
+		commandBuffer.CmdDraw(3, 1, 0, 0);
+
+		commandBuffer.CmdEndRenderPass();
+		commandBuffer.End();
+	}
+
+	private void DrawFrame()
+	{
+
+	}
+
+	#endregion Drawing
+
 	#region Graphics Pipeline
 
-	private void CreateGraphicsPipeline()
+	private static RenderPass CreateRenderPass(Device device, Format format)
 	{
+		var attachmentDescription = new AttachmentDescription
+		{
+			Format = format,
+			Samples = SampleCountFlags.Count1,
+			LoadOp = AttachmentLoadOp.Clear,
+			StoreOp = AttachmentStoreOp.Store,
+			StencilLoadOp = AttachmentLoadOp.DontCare,
+			StencilStoreOp = AttachmentStoreOp.DontCare,
+			InitialLayout = ImageLayout.Undefined,
+			FinalLayout = ImageLayout.PresentSrcKhr,
+		};
+
+		var colorAttachmentRef = new AttachmentReference
+		{
+			Attachment = 0,
+			Layout = ImageLayout.ColorAttachmentOptimal
+		};
+		var subpass = new SubpassDescription
+		{
+			PipelineBindPoint = PipelineBindPoint.Graphics,
+			ColorAttachmentCount = 1,
+			ColorAttachments = new[] { colorAttachmentRef },
+		};
+
+		var renderPassCreateInfo = new RenderPassCreateInfo
+		{
+			AttachmentCount = 1,
+			Attachments = new[] { attachmentDescription },
+			SubpassCount = 1,
+			Subpasses = new[] { subpass }
+		};
+
+		return device.CreateRenderPass(renderPassCreateInfo);
+	}
+
+	private (PipelineLayout pipelineLayout, Pipeline graphicsPipeline) CreateGraphicsPipeline(Device device, Extent2D extent, RenderPass renderPass)
+	{
+		var vertModule = device.CreateShaderModule(File.ReadAllBytes("Shaders/spv/vert.spv"));
+		var fragModule = device.CreateShaderModule(File.ReadAllBytes("Shaders/spv/frag.spv"));
+
+		var vertShaderStageInfo = new PipelineShaderStageCreateInfo
+		{
+			Stage = ShaderStageFlags.Vertex,
+			Module = vertModule,
+			Name = "main",
+		};
+
+		var fragShaderStageInfo = new PipelineShaderStageCreateInfo
+		{
+			Stage = ShaderStageFlags.Fragment,
+			Module = fragModule,
+			Name = "main"
+		};
+
+		var shaderStages = new[]
+		{
+			vertShaderStageInfo,
+			fragShaderStageInfo,
+		};
+
+		var vertInputInfo = new PipelineVertexInputStateCreateInfo
+		{
+			VertexAttributeDescriptionCount = 0,
+			VertexBindingDescriptionCount = 0
+		};
+
+		var inputAssemblyInfo = new PipelineInputAssemblyStateCreateInfo
+		{
+			Topology = PrimitiveTopology.TriangleList,
+			PrimitiveRestartEnable = false
+		};
+
+		var viewPort = new Viewport
+		{
+			X = 0,
+			Y = 0,
+			Width = extent.Width,
+			Height = extent.Height,
+			MaxDepth = 0,
+			MinDepth = 1
+		};
+
+		var scissor = new Rect2D
+		{
+			Offset = new Offset2D { X = 0, Y = 0 },
+			Extent = extent
+		};
+
+		var dynamicStateInfo = new PipelineDynamicStateCreateInfo
+		{
+			DynamicStateCount = 2,
+			DynamicStates = new[] { DynamicState.Viewport, DynamicState.Scissor }
+		};
+
+		var viewportStateInfo = new PipelineViewportStateCreateInfo
+		{
+			ViewportCount = 1,
+			Viewports = new[] { viewPort },
+			ScissorCount = 1,
+			Scissors = new[] { scissor },
+		};
+
+		var rasterizer = new PipelineRasterizationStateCreateInfo
+		{
+			DepthClampEnable = false,
+			RasterizerDiscardEnable = false,
+			PolygonMode = PolygonMode.Fill,
+			LineWidth = 1,
+			CullMode = CullModeFlags.Back,
+			FrontFace = FrontFace.Clockwise,
+			DepthBiasEnable = false
+		};
+
+		var multisamplingInfo = new PipelineMultisampleStateCreateInfo
+		{
+			SampleShadingEnable = false,
+			RasterizationSamples = SampleCountFlags.Count1,
+			//Optional
+			MinSampleShading = 1,
+			AlphaToCoverageEnable = false,
+			AlphaToOneEnable = false,
+		};
+
+		var colorBlendAttachment = new PipelineColorBlendAttachmentState
+		{
+			ColorWriteMask = ColorComponentFlags.R | ColorComponentFlags.G | ColorComponentFlags.B | ColorComponentFlags.A,
+			BlendEnable = false,
+		};
+
+		var colorBlendingInfo = new PipelineColorBlendStateCreateInfo
+		{
+			LogicOpEnable = false,
+			AttachmentCount = 1,
+			Attachments = new[] { colorBlendAttachment }
+		};
+
+		var piplelineLayoutInfo = new PipelineLayoutCreateInfo
+		{
+			SetLayoutCount = 0,
+		};
+
+		var pipelineLayout = device.CreatePipelineLayout(piplelineLayoutInfo);
+
+		var pipelineInfo = new GraphicsPipelineCreateInfo
+		{
+			StageCount = 2,
+			Stages = shaderStages,
+			VertexInputState = vertInputInfo,
+			InputAssemblyState = inputAssemblyInfo,
+			ViewportState = viewportStateInfo,
+			RasterizationState = rasterizer,
+			MultisampleState = multisamplingInfo,
+			ColorBlendState = colorBlendingInfo,
+			DynamicState = dynamicStateInfo,
+			Layout = pipelineLayout,
+			RenderPass = renderPass,
+			Subpass = 0
+		};
+
+		var graphicsPipeline = device.CreateGraphicsPipelines(null, new[] { pipelineInfo });
+
+		return (pipelineLayout, graphicsPipeline.First());
 	}
 
 	#endregion Graphics Pipeline
@@ -149,18 +436,15 @@ public class MeteoraApp : IDisposable
 		};
 
 		var device = physicalDevice.CreateDevice(deviceCreateInfo);
-		
 
 		return device;
 	}
-
-	
 
 	#endregion Device
 
 	#region Swap chain
 
-	private (SwapchainKhr swapchain, Image[] swapImages, Format format, Extent2D extent) CreateSwapChain(PhysicalDevice physicalDevice, SurfaceKhr surface, Device device)
+	private (SwapchainKhr swapchain, Format format, Extent2D extent) CreateSwapChain(PhysicalDevice physicalDevice, SurfaceKhr surface, Device device)
 	{
 		var swapSupport = physicalDevice.QuerySwapChainSupport(surface);
 
@@ -205,9 +489,8 @@ public class MeteoraApp : IDisposable
 
 		var swapchain = device.CreateSwapchainKHR(createInfo);
 
-		var swapImages = device.GetSwapchainImagesKHR(_swapchain);
 
-		return (swapchain, swapImages, format.Format, extent);
+		return (swapchain, format.Format, extent);
 	}
 
 	private ImageView[] CreateImageViews(Device device, Image[] swapImages)
@@ -241,7 +524,7 @@ public class MeteoraApp : IDisposable
 			swapchainImageViews[i] = device.CreateImageView(createInfo);
 		}
 
-		return	swapchainImageViews;
+		return swapchainImageViews;
 	}
 
 	#endregion Swap chain
@@ -283,6 +566,8 @@ public class MeteoraApp : IDisposable
 		while (!_window.ShouldClose)
 		{
 			_window.PollEvents();
+			_window.Title = "test";
+			DrawFrame();
 		}
 	}
 
@@ -328,13 +613,29 @@ public class MeteoraApp : IDisposable
 
 	private void Cleanup()
 	{
+		if (_commandPool != null)
+			_device?.DestroyCommandPool(_commandPool);
+		if (_framebuffers != null)
+		{
+			for (int i = 0; i < _framebuffers.Length; i++)
+				_device?.DestroyFramebuffer(_framebuffers[i]);
+		}
+		if (_graphicsPipeline != null)
+			_device?.DestroyPipeline(_graphicsPipeline);
+		if (_pipelineLayout != null)
+			_device?.DestroyPipelineLayout(_pipelineLayout);
+		if (_renderPass != null)
+			_device?.DestroyRenderPass(_renderPass);
 		if (_swapchainImageViews != null)
 		{
 			for (int i = 0; i < _swapchainImageViews.Length; i++)
 				_device?.DestroyImageView(_swapchainImageViews[i]);
 		}
-		_device?.DestroySwapchainKHR(_swapchain);
-		_instance?.DestroySurfaceKHR(_surface);
+		if (_swapchain != null)
+			_device?.DestroySwapchainKHR(_swapchain);
+		if (_surface != null)
+			_instance?.DestroySurfaceKHR(_surface);
+
 		_device?.Destroy();
 		_instance?.Dispose();
 		_window.Dispose();
