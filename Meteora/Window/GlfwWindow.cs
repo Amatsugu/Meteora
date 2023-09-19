@@ -29,6 +29,12 @@ public class GlfwWindow : MeteoraWindow
 		_window = Glfw.CreateWindow(Width, Height, Title, GLFW.Monitor.None, GLFW.Window.None);
 	}
 
+	public override void SetTitle(string title)
+	{
+		Title = title;
+		Glfw.SetWindowTitle(_window, title);
+	}
+
 	public override void PollEvents()
 	{
 		Glfw.PollEvents();

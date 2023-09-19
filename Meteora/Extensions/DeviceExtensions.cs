@@ -22,22 +22,25 @@ public static class DeviceExtensions
 	public static QueueFamilyIndices FindQueueFamilies(this PhysicalDevice device, SurfaceKhr surface)
 	{
 		var props = device.GetQueueFamilyProperties();
-		var indices = new QueueFamilyIndices();
+		uint? graphics = null, presentation = null;
 
 		for (int i = 0; i < props.Length; i++)
 		{
 			var fam = props[i];
 			if (fam.QueueFlags.HasFlag(QueueFlags.Graphics))
-				indices.graphics = (uint)i;
+				graphics = (uint)i;
 
 			if (device!.GetSurfaceSupportKHR((uint)i, surface))
-				indices.presentation = (uint)i;
+				presentation = (uint)i;
 
-			if (indices.IsComplete)
+			if (graphics != null && presentation != null)
 				break;
 		}
 
-		return indices;
+		if(graphics != null && presentation != null)
+			return new QueueFamilyIndices((uint) graphics, (uint)presentation);
+
+		return default;
 	}
 
 
@@ -45,7 +48,7 @@ public static class DeviceExtensions
 	{
 		var fams = device.FindQueueFamilies(surface);
 
-		return fams.IsComplete && device.AreExtensionsSupported(extensions) && IsSwapChainAdequate(device, surface);
+		return fams.isComplete && device.AreExtensionsSupported(extensions) && IsSwapChainAdequate(device, surface);
 	}
 
 	public static bool IsSwapChainAdequate(this PhysicalDevice device, SurfaceKhr surface)

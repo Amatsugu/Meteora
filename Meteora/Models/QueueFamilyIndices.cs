@@ -1,10 +1,17 @@
 ﻿namespace Meteora.Models;
 
-public struct QueueFamilyIndices
+public readonly struct QueueFamilyIndices
 {
-	public uint? graphics;
-	public uint? presentation;
+	public readonly uint graphics;
+	public readonly uint presentation;
+	public readonly bool isComplete;
 
-	public readonly uint[] UniqueIndices => new[] { (uint)graphics!, (uint)presentation! }.Distinct().ToArray();
-	public readonly bool IsComplete => graphics != null && presentation != null;
+	public QueueFamilyIndices(uint graphics, uint presentation)
+	{
+		this.graphics = graphics;
+		this.presentation = presentation;
+		this.isComplete = true;
+	}
+
+	public readonly uint[] UniqueIndices => new[] { graphics, presentation }.Distinct().ToArray();
 }

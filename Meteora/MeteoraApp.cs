@@ -24,16 +24,25 @@ public class MeteoraApp : IDisposable
 	private Queue? _presentQueue;
 	private SurfaceKhr? _surface;
 	private SwapchainKhr? _swapchain;
-	private Image[]? _swapImages;
+	private Image[] _swapImages = Array.Empty<Image>();
 	private Format _curSwapChainFormat;
 	private Extent2D _curSwapChainExtent;
-	private ImageView[]? _swapchainImageViews;
+	private ImageView[] _swapchainImageViews = Array.Empty<ImageView>();
 	private PipelineLayout? _pipelineLayout;
 	private RenderPass? _renderPass;
 	private Pipeline? _graphicsPipeline;
-	private Framebuffer[]? _framebuffers;
+	private ShaderModule[] _shaderModules = Array.Empty<ShaderModule>();
+	private Framebuffer[] _framebuffers = Array.Empty<Framebuffer>();
 	private CommandPool? _commandPool;
-	private CommandBuffer? _commandBuffer;
+	private CommandBuffer[] _commandBuffers = Array.Empty<CommandBuffer>();
+	private Semaphore[] _imageAvailableSemaphores = Array.Empty<Semaphore>();
+	private Semaphore[] _renderFinishedSemaphores = Array.Empty<Semaphore>();
+	private Fence[] _inFlightFences = Array.Empty<Fence>();
+	public const uint VK_SUBPASS_EXTERNAL = ~0u;
+	public const int MAX_FRAMES_IN_FLIGHT = 2;
+
+	private bool _cleaning = false;
+	private int _curFrame = 0;
 
 	private readonly string[] _validationLayers = new[]
 	{
@@ -70,22 +79,24 @@ public class MeteoraApp : IDisposable
 		_physicalDevice = PickPhysicalDevice(_instance, _surface);
 		var indexFamilies = _physicalDevice.FindQueueFamilies(_surface);
 		_device = CreateLogicalDevice(_physicalDevice, _surface, indexFamilies);
-		_graphicsQueue = _device.GetQueue((uint)indexFamilies.graphics!, 0);
-		_presentQueue = _device.GetQueue((uint)indexFamilies.presentation!, 0);
+		_graphicsQueue = _device.GetQueue(indexFamilies.graphics!, 0);
+		_presentQueue = _device.GetQueue(indexFamilies.presentation!, 0);
 
 		//Swapchain
 		(_swapchain, _curSwapChainFormat, _curSwapChainExtent) = CreateSwapChain(_physicalDevice, _surface, _device);
 		_swapImages = _device.GetSwapchainImagesKHR(_swapchain);
 		_swapchainImageViews = CreateImageViews(_device, _swapImages);
-		
+
 		//Graphics Pipeline
 		_renderPass = CreateRenderPass(_device, _curSwapChainFormat);
-		(_pipelineLayout, _graphicsPipeline) = CreateGraphicsPipeline(_device, _curSwapChainExtent, _renderPass);
+		(_pipelineLayout, _graphicsPipeline, _shaderModules) = CreateGraphicsPipeline(_device, _curSwapChainExtent, _renderPass);
 
 		//Drawing
 		_framebuffers = CreateFrameBuffers(_device, _swapchainImageViews, _renderPass, _curSwapChainExtent);
 		_commandPool = CreateCommandPool(_device, indexFamilies);
-		_commandBuffer = CreateCommandBuffer(_device, _commandPool);
+		_commandBuffers = CreateCommandBuffers(_device, _commandPool);
+
+		(_imageAvailableSemaphores, _renderFinishedSemaphores, _inFlightFences) = CreateSyncObjects(_device);
 	}
 
 	private SurfaceKhr PrepareSurface(Instance instance)
@@ -101,6 +112,21 @@ public class MeteoraApp : IDisposable
 	}
 
 	#region Drawing
+
+	private (Semaphore[] img, Semaphore[] render, Fence[] inFlight) CreateSyncObjects(Device device)
+	{
+		var img = new Semaphore[MAX_FRAMES_IN_FLIGHT]; ;
+		var render = new Semaphore[MAX_FRAMES_IN_FLIGHT]; ;
+		var fences = new Fence[MAX_FRAMES_IN_FLIGHT];
+		for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			img[i] = device.CreateSemaphore(new());
+			render[i] = device.CreateSemaphore(new());
+			fences[i] = device.CreateFence(new() { Flags = FenceCreateFlags.Signaled });
+		}
+
+		return (img, render, fences);
+	}
 
 	private static Framebuffer[] CreateFrameBuffers(Device device, ImageView[] swapchainViews, RenderPass renderPass, Extent2D extent)
 	{
@@ -137,19 +163,19 @@ public class MeteoraApp : IDisposable
 		return commandPool;
 	}
 
-	private static CommandBuffer CreateCommandBuffer(Device device, CommandPool commandPool)
+	private static CommandBuffer[] CreateCommandBuffers(Device device, CommandPool commandPool)
 	{
 		var allocInfo = new CommandBufferAllocateInfo
 		{
 			CommandPool = commandPool,
-			CommandBufferCount = 1,
+			CommandBufferCount = MAX_FRAMES_IN_FLIGHT,
 			Level = CommandBufferLevel.Primary
 		};
 
-		return device.AllocateCommandBuffers(allocInfo).First();
+		return device.AllocateCommandBuffers(allocInfo);
 	}
 
-	private void RecordCommandBuffer(CommandBuffer commandBuffer, Framebuffer framebuffer, RenderPass renderPass, Extent2D extent, Pipeline graphicsPipeline)
+	private static void RecordCommandBuffer(CommandBuffer commandBuffer, Framebuffer framebuffer, RenderPass renderPass, Extent2D extent, Pipeline graphicsPipeline)
 	{
 		var beginInfo = new CommandBufferBeginInfo
 		{
@@ -161,7 +187,7 @@ public class MeteoraApp : IDisposable
 		{
 			Color = new ClearColorValue
 			{
-				Float32 = new[] { 0f, 0f, 0f, 1f }
+				Float32 = new[] { .01f, 0f, .01f, 1f }
 			}
 		};
 
@@ -203,9 +229,43 @@ public class MeteoraApp : IDisposable
 		commandBuffer.End();
 	}
 
-	private void DrawFrame()
+	private void DrawFrame(double deltaTime)
 	{
+		_device!.WaitForFence(_inFlightFences[_curFrame], true, ulong.MaxValue);
+		_device.ResetFence(_inFlightFences[_curFrame]);
 
+		var imageIndex = _device.AcquireNextImageKHR(_swapchain!, ulong.MaxValue, _imageAvailableSemaphores[_curFrame]);
+
+		_commandBuffers[_curFrame].Reset();
+		RecordCommandBuffer(_commandBuffers[_curFrame], _framebuffers![imageIndex], _renderPass!, _curSwapChainExtent!, _graphicsPipeline!);
+
+		var signalSemaphores = new[] { _renderFinishedSemaphores[_curFrame] };
+
+		var submitInfo = new SubmitInfo
+		{
+			WaitSemaphoreCount = 1,
+			WaitSemaphores = new[] { _imageAvailableSemaphores[_curFrame] },
+			WaitDstStageMask = new[] { PipelineStageFlags.ColorAttachmentOutput },
+			CommandBufferCount = 1,
+			CommandBuffers = new[] { _commandBuffers[_curFrame] },
+			SignalSemaphoreCount = (uint)signalSemaphores.Length,
+			SignalSemaphores = signalSemaphores
+		};
+
+		_graphicsQueue!.Submit(submitInfo, _inFlightFences[_curFrame]);
+
+		var presentInfo = new PresentInfoKhr
+		{
+			WaitSemaphoreCount = (uint)signalSemaphores.Length,
+			WaitSemaphores = signalSemaphores,
+			Swapchains = new[] { _swapchain },
+			SwapchainCount = 1,
+			ImageIndices = new[] { imageIndex },
+		};
+
+		_presentQueue!.PresentKHR(presentInfo);
+
+		_curFrame = (_curFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
 	#endregion Drawing
@@ -231,6 +291,17 @@ public class MeteoraApp : IDisposable
 			Attachment = 0,
 			Layout = ImageLayout.ColorAttachmentOptimal
 		};
+
+		var subpassDependency = new SubpassDependency
+		{
+			SrcSubpass = VK_SUBPASS_EXTERNAL, //Find value
+			DstSubpass = 0,
+			SrcStageMask = PipelineStageFlags.ColorAttachmentOutput,
+			SrcAccessMask = 0,
+			DstStageMask = PipelineStageFlags.ColorAttachmentOutput,
+			DstAccessMask = AccessFlags.ColorAttachmentWrite
+		};
+
 		var subpass = new SubpassDescription
 		{
 			PipelineBindPoint = PipelineBindPoint.Graphics,
@@ -243,16 +314,20 @@ public class MeteoraApp : IDisposable
 			AttachmentCount = 1,
 			Attachments = new[] { attachmentDescription },
 			SubpassCount = 1,
-			Subpasses = new[] { subpass }
+			Subpasses = new[] { subpass },
+			Dependencies = new[] { subpassDependency },
+			DependencyCount = 1,
 		};
 
 		return device.CreateRenderPass(renderPassCreateInfo);
 	}
 
-	private (PipelineLayout pipelineLayout, Pipeline graphicsPipeline) CreateGraphicsPipeline(Device device, Extent2D extent, RenderPass renderPass)
+	private (PipelineLayout pipelineLayout, Pipeline graphicsPipeline, ShaderModule[] shaderModules) CreateGraphicsPipeline(Device device, Extent2D extent, RenderPass renderPass)
 	{
 		var vertModule = device.CreateShaderModule(File.ReadAllBytes("Shaders/spv/vert.spv"));
 		var fragModule = device.CreateShaderModule(File.ReadAllBytes("Shaders/spv/frag.spv"));
+
+		var shaderModules = new[] { vertModule, fragModule };
 
 		var vertShaderStageInfo = new PipelineShaderStageCreateInfo
 		{
@@ -375,7 +450,7 @@ public class MeteoraApp : IDisposable
 
 		var graphicsPipeline = device.CreateGraphicsPipelines(null, new[] { pipelineInfo });
 
-		return (pipelineLayout, graphicsPipeline.First());
+		return (pipelineLayout, graphicsPipeline.First(), shaderModules);
 	}
 
 	#endregion Graphics Pipeline
@@ -489,7 +564,6 @@ public class MeteoraApp : IDisposable
 
 		var swapchain = device.CreateSwapchainKHR(createInfo);
 
-
 		return (swapchain, format.Format, extent);
 	}
 
@@ -563,12 +637,15 @@ public class MeteoraApp : IDisposable
 
 	private void MainLoop()
 	{
+		var start = DateTime.Now;
 		while (!_window.ShouldClose)
 		{
 			_window.PollEvents();
-			_window.Title = "test";
-			DrawFrame();
+			var delta = DateTime.Now - start;
+			DrawFrame(delta.TotalSeconds);
+			start = DateTime.Now;
 		}
+		_device!.WaitIdle();
 	}
 
 	#region Validation Layers
@@ -613,13 +690,27 @@ public class MeteoraApp : IDisposable
 
 	private void Cleanup()
 	{
+		if (_cleaning)
+			return;
+		_cleaning = true;
+		_device?.WaitIdle();
+		foreach (var sema in _imageAvailableSemaphores)
+			_device?.DestroySemaphore(sema);
+		foreach (var sema in _renderFinishedSemaphores)
+			_device?.DestroySemaphore(sema);
+		foreach (var fence in _inFlightFences)
+			_device?.DestroyFence(fence);
 		if (_commandPool != null)
-			_device?.DestroyCommandPool(_commandPool);
-		if (_framebuffers != null)
 		{
-			for (int i = 0; i < _framebuffers.Length; i++)
-				_device?.DestroyFramebuffer(_framebuffers[i]);
+			foreach (var cmdBuffer in _commandBuffers)
+				_device?.FreeCommandBuffer(_commandPool, cmdBuffer);
+			_device?.DestroyCommandPool(_commandPool);
 		}
+		for (int i = 0; i < _framebuffers.Length; i++)
+			_device?.DestroyFramebuffer(_framebuffers[i]);
+		foreach (var shader in _shaderModules)
+			_device?.DestroyShaderModule(shader);
+
 		if (_graphicsPipeline != null)
 			_device?.DestroyPipeline(_graphicsPipeline);
 		if (_pipelineLayout != null)
@@ -653,11 +744,11 @@ public class MeteoraApp : IDisposable
 		}
 	}
 
-	~MeteoraApp()
-	{
-		// Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-		Dispose(disposing: false);
-	}
+	//~MeteoraApp()
+	//{
+	//	// Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+	//	Dispose(disposing: false);
+	//}
 
 	public void Dispose()
 	{
