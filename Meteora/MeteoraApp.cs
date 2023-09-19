@@ -5,6 +5,7 @@ using Meteora.Window;
 namespace Meteora;
 
 using Meteora.Extensions;
+using Meteora.Models;
 
 using System.Runtime.InteropServices;
 
@@ -53,28 +54,35 @@ public class MeteoraApp : IDisposable
 
 	private void InitVulkan()
 	{
-		CreateInstance();
+		_instance = CreateInstance();
 #if ENABLE_VALIDATION_LAYERS
-		SetupDebugMessenger();
+		SetupDebugMessenger(_instance);
 #endif
-		PrepareSurface();
-		PickPhysicalDevice();
-		CreateLogicalDevice();
-		CreateSwapChain();
-		CreateImageViews();
+		_surface = PrepareSurface(_instance);
+		
+		//Device
+		_physicalDevice = PickPhysicalDevice(_instance, _surface);
+		var indexFamilies = _physicalDevice.FindQueueFamilies(_surface);
+		_device = CreateLogicalDevice(_physicalDevice, _surface, indexFamilies);
+		_graphicsQueue = _device.GetQueue((uint)indexFamilies.graphics!, 0);
+		_presentQueue = _device.GetQueue((uint)indexFamilies.presentation!, 0);
+
+		//Swapchain
+		(_swapchain, _swapImages, _curSwapChainFormat, _curSwapChainExtent) = CreateSwapChain(_physicalDevice, _surface, _device);
+		_swapchainImageViews = CreateImageViews(_device, _swapImages);
 		CreateGraphicsPipeline();
 	}
 
-	private void PrepareSurface()
+	private SurfaceKhr PrepareSurface(Instance instance)
 	{
-		var instancePtr = ((IMarshalling)_instance!).Handle;
+		var instancePtr = ((IMarshalling)instance!).Handle;
 		_ = _window.GetSurface(instancePtr, out var surfacePtr);
 
-		var surface = Activator.CreateInstance(typeof(SurfaceKhr), true) as SurfaceKhr;
+		var surface = Activator.CreateInstance(typeof(SurfaceKhr), true) as SurfaceKhr ?? throw new Exception("Failed to activate surface handle wrapper");
 		var handleField = typeof(SurfaceKhr).GetField("m", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 		handleField!.SetValue(surface, (ulong)surfacePtr);
 
-		_surface = surface;
+		return surface;
 	}
 
 	#region Graphics Pipeline
@@ -87,15 +95,30 @@ public class MeteoraApp : IDisposable
 
 	#region Device
 
-	private void CreateLogicalDevice()
+	private PhysicalDevice PickPhysicalDevice(Instance instance, SurfaceKhr surface)
 	{
-		if (_physicalDevice == null)
-			throw new Exception("Physical device is not set");
-		if (_surface == null)
-			throw new Exception("Surface not created");
+		var devices = instance!.EnumeratePhysicalDevices();
+		var suitableDevices = devices.Where(d => d.IsDeviceSuitable(surface, _deviceExtensions)).OrderBy(GetDeviceScore);
 
-		var indexFamilies = _physicalDevice.FindQueueFamilies(_surface!);
-		var indices = indexFamilies.UniqueIndices;
+		static int GetDeviceScore(PhysicalDevice dev)
+		{
+			var devProps = dev.GetProperties();
+			var features = dev.GetFeatures();
+			var score = 0;
+			if (devProps.DeviceType == PhysicalDeviceType.DiscreteGpu)
+				score += 1000;
+
+			score += (int)devProps.Limits.MaxImageDimension2D;
+			return 0;
+		}
+
+		var best = suitableDevices.FirstOrDefault() ?? throw new Exception("Failed to find a suitable GPU");
+		return best;
+	}
+
+	private Device CreateLogicalDevice(PhysicalDevice physicalDevice, SurfaceKhr surface, QueueFamilyIndices queueFamilyIndices)
+	{
+		var indices = queueFamilyIndices.UniqueIndices;
 
 		var queueInfo = new DeviceQueueCreateInfo[indices.Length];
 		for (int i = 0; i < queueInfo.Length; i++)
@@ -125,49 +148,21 @@ public class MeteoraApp : IDisposable
 #endif
 		};
 
-		_device = _physicalDevice.CreateDevice(deviceCreateInfo);
-		_graphicsQueue = _device.GetQueue((uint)indexFamilies.graphics!, 0);
-		_presentQueue = _device.GetQueue((uint)indexFamilies.presentation!, 0);
+		var device = physicalDevice.CreateDevice(deviceCreateInfo);
+		
+
+		return device;
 	}
 
-	private void PickPhysicalDevice()
-	{
-		if (_surface == null)
-			throw new Exception("Surface not created");
-
-		var devices = _instance!.EnumeratePhysicalDevices();
-		var suitableDevices = devices.Where(d => d.IsDeviceSuitable(_surface, _deviceExtensions)).OrderBy(GetDeviceScore);
-
-		static int GetDeviceScore(PhysicalDevice dev)
-		{
-			var devProps = dev.GetProperties();
-			var features = dev.GetFeatures();
-			var score = 0;
-			if (devProps.DeviceType == PhysicalDeviceType.DiscreteGpu)
-				score += 1000;
-
-			score += (int)devProps.Limits.MaxImageDimension2D;
-			return 0;
-		}
-
-		var best = suitableDevices.FirstOrDefault() ?? throw new Exception("Failed to find a suitable GPU");
-		_physicalDevice = best;
-	}
+	
 
 	#endregion Device
 
 	#region Swap chain
 
-	private void CreateSwapChain()
+	private (SwapchainKhr swapchain, Image[] swapImages, Format format, Extent2D extent) CreateSwapChain(PhysicalDevice physicalDevice, SurfaceKhr surface, Device device)
 	{
-		if (_physicalDevice == null)
-			throw new Exception("Physical device is not set");
-		if (_surface == null)
-			throw new Exception("Surface not created");
-		if (_device == null)
-			throw new Exception("Logical Device not created");
-
-		var swapSupport = _physicalDevice.QuerySwapChainSupport(_surface);
+		var swapSupport = physicalDevice.QuerySwapChainSupport(surface);
 
 		var format = swapSupport.ChooseSwapSurfaceFormat();
 		var presentMode = swapSupport.ChooseSwapPresentMode();
@@ -195,7 +190,7 @@ public class MeteoraApp : IDisposable
 			OldSwapchain = null
 		};
 
-		var indices = _physicalDevice.FindQueueFamilies(_surface);
+		var indices = physicalDevice.FindQueueFamilies(surface);
 		var uniqueIndices = indices.UniqueIndices;
 		if (indices.graphics != indices.presentation)
 		{
@@ -208,28 +203,22 @@ public class MeteoraApp : IDisposable
 			createInfo.ImageSharingMode = SharingMode.Exclusive;
 		}
 
-		_swapchain = _device.CreateSwapchainKHR(createInfo);
+		var swapchain = device.CreateSwapchainKHR(createInfo);
 
-		_swapImages = _device.GetSwapchainImagesKHR(_swapchain);
+		var swapImages = device.GetSwapchainImagesKHR(_swapchain);
 
-		_curSwapChainFormat = format.Format;
-		_curSwapChainExtent = extent;
+		return (swapchain, swapImages, format.Format, extent);
 	}
 
-	private void CreateImageViews()
+	private ImageView[] CreateImageViews(Device device, Image[] swapImages)
 	{
-		if (_swapImages == null)
-			throw new Exception("Swap images is not set");
-		if (_device == null)
-			throw new Exception("Logical Device is not set");
+		var swapchainImageViews = new ImageView[swapImages.Length];
 
-		_swapchainImageViews = new ImageView[_swapImages.Length];
-
-		for (int i = 0; i < _swapchainImageViews.Length; i++)
+		for (int i = 0; i < swapchainImageViews.Length; i++)
 		{
 			var createInfo = new ImageViewCreateInfo
 			{
-				Image = _swapImages[i],
+				Image = swapImages[i],
 				ViewType = ImageViewType.View2D,
 				Format = _curSwapChainFormat,
 				Components = new ComponentMapping
@@ -249,13 +238,15 @@ public class MeteoraApp : IDisposable
 				}
 			};
 
-			_swapchainImageViews[i] = _device.CreateImageView(createInfo);
+			swapchainImageViews[i] = device.CreateImageView(createInfo);
 		}
+
+		return	swapchainImageViews;
 	}
 
 	#endregion Swap chain
 
-	private void CreateInstance()
+	private Instance CreateInstance()
 	{
 #if ENABLE_VALIDATION_LAYERS
 		CheckValiationLayersSupport();
@@ -284,7 +275,7 @@ public class MeteoraApp : IDisposable
 #endif
 		};
 
-		_instance = new Instance(createInfo);
+		return new Instance(createInfo);
 	}
 
 	private void MainLoop()
@@ -315,10 +306,10 @@ public class MeteoraApp : IDisposable
 			throw new Exception($"The requested validation layers are not suported\n{string.Join("\n\t", unsupported)}");
 	}
 
-	private void SetupDebugMessenger()
+	private static void SetupDebugMessenger(Instance instance)
 	{
 		var debugCallback = new DebugReportCallback(DebugReportCallback);
-		_instance!.EnableDebug(debugCallback);
+		instance!.EnableDebug(debugCallback);
 	}
 
 	private static Bool32 DebugReportCallback(DebugReportFlagsExt flags, DebugReportObjectTypeExt objectType, ulong objectHandle, IntPtr location, int messageCode, IntPtr layerPrefix, IntPtr message, IntPtr userData)

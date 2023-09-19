@@ -65,4 +65,26 @@ public static class DeviceExtensions
 
 		return details;
 	}
+
+	public static ShaderModule CreateShaderModule(this Device device, Stream code)
+	{
+		var codeBytes = new byte[code.Length];
+		code.Read(codeBytes, 0, codeBytes.Length);
+		var info = new ShaderModuleCreateInfo 
+		{ 
+			CodeBytes = codeBytes,
+			CodeSize = (uint)codeBytes.Length,
+		};
+		return device.CreateShaderModule(info);
+	}
+
+	public static ShaderModule CreateShaderModule(this Device device, byte[] codeBytes)
+	{
+		var info = new ShaderModuleCreateInfo
+		{
+			CodeBytes = codeBytes,
+			CodeSize = (uint)codeBytes.Length,
+		};
+		return device.CreateShaderModule(info);
+	}
 }

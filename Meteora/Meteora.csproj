@@ -24,7 +24,7 @@
 	
 
   <ItemGroup>
-    <Folder Include="Shaders\bin\" />
+    <Folder Include="Shaders\code\" />
     <Folder Include="Shaders\src\" />
   </ItemGroup>
 
