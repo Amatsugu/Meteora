@@ -688,6 +688,16 @@ public class MeteoraApp : IDisposable
 
 	#region Cleaup
 
+	private void CleanupSwapchain()
+	{
+		for (int i = 0; i < _framebuffers.Length; i++)
+			_device?.DestroyFramebuffer(_framebuffers[i]);
+		for (int i = 0; i < _swapchainImageViews.Length; i++)
+			_device?.DestroyImageView(_swapchainImageViews[i]);
+		if (_swapchain != null)
+			_device?.DestroySwapchainKHR(_swapchain);
+	}
+
 	private void Cleanup()
 	{
 		if (_cleaning)
@@ -701,15 +711,12 @@ public class MeteoraApp : IDisposable
 		foreach (var fence in _inFlightFences)
 			_device?.DestroyFence(fence);
 		if (_commandPool != null)
-		{
-			foreach (var cmdBuffer in _commandBuffers)
-				_device?.FreeCommandBuffer(_commandPool, cmdBuffer);
 			_device?.DestroyCommandPool(_commandPool);
-		}
-		for (int i = 0; i < _framebuffers.Length; i++)
-			_device?.DestroyFramebuffer(_framebuffers[i]);
+		
 		foreach (var shader in _shaderModules)
 			_device?.DestroyShaderModule(shader);
+
+		CleanupSwapchain();
 
 		if (_graphicsPipeline != null)
 			_device?.DestroyPipeline(_graphicsPipeline);
@@ -717,13 +724,7 @@ public class MeteoraApp : IDisposable
 			_device?.DestroyPipelineLayout(_pipelineLayout);
 		if (_renderPass != null)
 			_device?.DestroyRenderPass(_renderPass);
-		if (_swapchainImageViews != null)
-		{
-			for (int i = 0; i < _swapchainImageViews.Length; i++)
-				_device?.DestroyImageView(_swapchainImageViews[i]);
-		}
-		if (_swapchain != null)
-			_device?.DestroySwapchainKHR(_swapchain);
+		
 		if (_surface != null)
 			_instance?.DestroySurfaceKHR(_surface);
 

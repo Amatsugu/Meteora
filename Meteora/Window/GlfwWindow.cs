@@ -1,5 +1,7 @@
 ﻿using GLFW;
 
+using System.Runtime.InteropServices;
+
 namespace Meteora.Window;
 
 public class GlfwWindow : MeteoraWindow
@@ -16,7 +18,9 @@ public class GlfwWindow : MeteoraWindow
 	{
 		var handleField = typeof(GLFW.Window).GetField("handle", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 		var windowHandle = (IntPtr)handleField!.GetValue(_window)!;
-		return GLFW.Vulkan.CreateWindowSurface(instance, windowHandle, nint.Zero, out surfacePtr);
+		var r = GLFW.Vulkan.CreateWindowSurface(instance, windowHandle, nint.Zero, out var ptr);
+		surfacePtr = (nint)ptr;
+		return r;
 	}
 
 	public override void Init()
@@ -52,10 +56,23 @@ public class GlfwWindow : MeteoraWindow
 		Glfw.Terminate();
 	}
 
+	[DllImport(Glfw.LIBRARY, EntryPoint = "glfwGetRequiredInstanceExtensions", CallingConvention = CallingConvention.Cdecl)]
+	private static extern IntPtr GetRequiredInstanceExtensions(out uint count);
+
 	public override string[] GetRequiredInstanceExtensions()
 	{
-		return new string[] { "VK_KHR_surface", "VK_KHR_win32_surface" };
-		//TODO: figure out why this fails
-		//return GLFW.Vulkan.GetRequiredInstanceExtensions();
+		var ptr = GetRequiredInstanceExtensions(out var count);
+		var extensions = new string?[count];
+		if (count > 0 && ptr != IntPtr.Zero)
+		{
+			var offset = 0;
+			for (var i = 0; i < count; i++, offset += IntPtr.Size)
+			{
+				var p = Marshal.ReadIntPtr(ptr, offset);
+				extensions[i] = Marshal.PtrToStringAnsi(p);
+			}
+		}
+
+		return extensions.Where(s => !string.IsNullOrWhiteSpace(s)).ToArray()!;
 	}
 }
