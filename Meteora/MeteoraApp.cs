@@ -1,4 +1,4 @@
-﻿#define ENABLE_VALIDATION_LAYERS
+﻿//#define ENABLE_VALIDATION_LAYERS
 
 using Meteora.Window;
 
@@ -641,9 +641,12 @@ public class MeteoraApp : IDisposable
 		while (!_window.ShouldClose)
 		{
 			_window.PollEvents();
-			var delta = DateTime.Now - start;
-			DrawFrame(delta.TotalSeconds);
+			var delta = (DateTime.Now - start);
+			var deltaS = delta.TotalSeconds;
+			DrawFrame(deltaS);
 			start = DateTime.Now;
+
+			_window.SetTitle($"FT: {delta.TotalMilliseconds:00.000}ms {(int)(1f / deltaS)} fps");
 		}
 		_device!.WaitIdle();
 	}
