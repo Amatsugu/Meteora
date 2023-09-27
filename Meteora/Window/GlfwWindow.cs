@@ -27,7 +27,7 @@ public class GlfwWindow : MeteoraWindow
 		var handleField = typeof(GLFW.Window).GetField("handle", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 		var windowHandle = (IntPtr)handleField!.GetValue(_window)!;
 		var r = GLFW.Vulkan.CreateWindowSurface(instance, windowHandle, nint.Zero, out var ptr);
-		surfacePtr = (nint)ptr;
+		surfacePtr = ptr;
 		return r;
 	}
 

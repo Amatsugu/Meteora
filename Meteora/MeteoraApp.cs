@@ -116,10 +116,7 @@ public class MeteoraApp : IDisposable
 
 	private void SetFrameBufferSize(IntPtr window, int width, int height)
 	{
-		if (_instance == null)
-			return;
-		Console.WriteLine($"Resizing to {width}x{height}");
-		
+		_needResize = true;
 	}
 
 	#region Drawing
@@ -280,11 +277,10 @@ public class MeteoraApp : IDisposable
 
 			_curFrame = (_curFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 		}
-		catch(Vulkan.ResultException ex)
+		catch (Vulkan.ResultException ex)
 		{
 			Console.WriteLine($"Failed to acquire next image {ex.Result}, recreating swapchain");
 			RecreateSwapchain(_device!, _physicalDevice!, _surface!, _renderPass!);
-
 		}
 	}
 
@@ -542,7 +538,7 @@ public class MeteoraApp : IDisposable
 	private void RecreateSwapchain(Device device, PhysicalDevice physicalDevice, SurfaceKhr surface, RenderPass renderPass)
 	{
 		var (width, height) = _window.GetFrameBufferSize();
-		while(width == 0 || height == 0)
+		while (width == 0 || height == 0)
 		{
 			(width, height) = _window.GetFrameBufferSize();
 			_window.WaitEvents();
@@ -682,21 +678,19 @@ public class MeteoraApp : IDisposable
 		{
 			try
 			{
-
-			_window.PollEvents();
-			if (_needResize)
-			{
-				_device!.WaitIdle();
-				RecreateSwapchain(_device!, _physicalDevice!, _surface!, _renderPass!);
-				_needResize = false;
-				continue;
-			}
-			var delta = (DateTime.Now - start);
-			var deltaS = delta.TotalSeconds;
-			DrawFrame(deltaS);
-			start = DateTime.Now;
-
-			_window.SetTitle($"FT: {delta.TotalMilliseconds:00.000}ms {(int)(1f / deltaS)} fps");
+				_window.PollEvents();
+				if (_needResize)
+				{
+					_device!.WaitIdle();
+					RecreateSwapchain(_device!, _physicalDevice!, _surface!, _renderPass!);
+					_needResize = false;
+					continue;
+				}
+				var delta = (DateTime.Now - start);
+				var deltaS = delta.TotalSeconds;
+				DrawFrame(deltaS);
+				start = DateTime.Now;
+				Thread.Sleep(60);
 			}
 			catch (ResultException ex)
 			{
