@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 namespace Meteora.Window;
 public abstract class MeteoraWindow : IDisposable
 {
+	public abstract event Action<IntPtr, int, int>? OnSetFrameBufferSize;
 	public bool IsInit { get; set; }
 	public int Height { get; set; }
 	public int Width { get; set; }
@@ -30,6 +31,7 @@ public abstract class MeteoraWindow : IDisposable
 
 	protected abstract void Cleanup();
 	public abstract void PollEvents();
+	public abstract void WaitEvents();
 
 	public abstract string[] GetRequiredInstanceExtensions();
 

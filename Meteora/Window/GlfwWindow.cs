@@ -6,7 +6,15 @@ namespace Meteora.Window;
 
 public class GlfwWindow : MeteoraWindow
 {
+	public override event Action<nint, int, int>? OnSetFrameBufferSize
+	{
+		add { _onSetFrameBufferSize += value; }
+		remove { _onSetFrameBufferSize -= value; }
+	}
+
 	private GLFW.Window _window;
+
+	private event Action<nint, int, int>? _onSetFrameBufferSize;
 
 	public override bool ShouldClose => Glfw.WindowShouldClose(_window);
 
@@ -26,11 +34,17 @@ public class GlfwWindow : MeteoraWindow
 	public override void Init()
 	{
 		Glfw.Init();
-		
+
 		Glfw.WindowHint(Hint.ClientApi, ClientApi.None);
-		Glfw.WindowHint(Hint.Resizable, false);
+		Glfw.WindowHint(Hint.Resizable, true);
 
 		_window = Glfw.CreateWindow(Width, Height, Title, GLFW.Monitor.None, GLFW.Window.None);
+		Glfw.SetFramebufferSizeCallback(_window, InvokeSetFrameBufferSizeCallback);
+	}
+
+	private void InvokeSetFrameBufferSizeCallback(IntPtr window, int width, int height)
+	{
+		_onSetFrameBufferSize?.Invoke(window, width, height);
 	}
 
 	public override void SetTitle(string title)
@@ -42,6 +56,11 @@ public class GlfwWindow : MeteoraWindow
 	public override void PollEvents()
 	{
 		Glfw.PollEvents();
+	}
+
+	public override void WaitEvents()
+	{
+		Glfw.WaitEvents();
 	}
 
 	public override (uint width, uint height) GetFrameBufferSize()

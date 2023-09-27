@@ -43,6 +43,7 @@ public class MeteoraApp : IDisposable
 
 	private bool _cleaning = false;
 	private int _curFrame = 0;
+	private bool _needResize = false;
 
 	private readonly string[] _validationLayers = new[]
 	{
@@ -70,6 +71,8 @@ public class MeteoraApp : IDisposable
 	private void InitVulkan()
 	{
 		_instance = CreateInstance();
+		_window.OnSetFrameBufferSize += SetFrameBufferSize;
+
 #if ENABLE_VALIDATION_LAYERS
 		SetupDebugMessenger(_instance);
 #endif
@@ -109,6 +112,14 @@ public class MeteoraApp : IDisposable
 		handleField!.SetValue(surface, (ulong)surfacePtr);
 
 		return surface;
+	}
+
+	private void SetFrameBufferSize(IntPtr window, int width, int height)
+	{
+		if (_instance == null)
+			return;
+		Console.WriteLine($"Resizing to {width}x{height}");
+		
 	}
 
 	#region Drawing
@@ -232,40 +243,49 @@ public class MeteoraApp : IDisposable
 	private void DrawFrame(double deltaTime)
 	{
 		_device!.WaitForFence(_inFlightFences[_curFrame], true, ulong.MaxValue);
-		_device.ResetFence(_inFlightFences[_curFrame]);
 
-		var imageIndex = _device.AcquireNextImageKHR(_swapchain!, ulong.MaxValue, _imageAvailableSemaphores[_curFrame]);
-
-		_commandBuffers[_curFrame].Reset();
-		RecordCommandBuffer(_commandBuffers[_curFrame], _framebuffers![imageIndex], _renderPass!, _curSwapChainExtent!, _graphicsPipeline!);
-
-		var signalSemaphores = new[] { _renderFinishedSemaphores[_curFrame] };
-
-		var submitInfo = new SubmitInfo
+		try
 		{
-			WaitSemaphoreCount = 1,
-			WaitSemaphores = new[] { _imageAvailableSemaphores[_curFrame] },
-			WaitDstStageMask = new[] { PipelineStageFlags.ColorAttachmentOutput },
-			CommandBufferCount = 1,
-			CommandBuffers = new[] { _commandBuffers[_curFrame] },
-			SignalSemaphoreCount = (uint)signalSemaphores.Length,
-			SignalSemaphores = signalSemaphores
-		};
+			var imageIndex = _device.AcquireNextImageKHR(_swapchain!, ulong.MaxValue, _imageAvailableSemaphores[_curFrame]);
+			_device.ResetFence(_inFlightFences[_curFrame]);
 
-		_graphicsQueue!.Submit(submitInfo, _inFlightFences[_curFrame]);
+			_commandBuffers[_curFrame].Reset();
+			RecordCommandBuffer(_commandBuffers[_curFrame], _framebuffers![imageIndex], _renderPass!, _curSwapChainExtent!, _graphicsPipeline!);
 
-		var presentInfo = new PresentInfoKhr
+			var signalSemaphores = new[] { _renderFinishedSemaphores[_curFrame] };
+
+			var submitInfo = new SubmitInfo
+			{
+				WaitSemaphoreCount = 1,
+				WaitSemaphores = new[] { _imageAvailableSemaphores[_curFrame] },
+				WaitDstStageMask = new[] { PipelineStageFlags.ColorAttachmentOutput },
+				CommandBufferCount = 1,
+				CommandBuffers = new[] { _commandBuffers[_curFrame] },
+				SignalSemaphoreCount = (uint)signalSemaphores.Length,
+				SignalSemaphores = signalSemaphores
+			};
+
+			_graphicsQueue!.Submit(submitInfo, _inFlightFences[_curFrame]);
+
+			var presentInfo = new PresentInfoKhr
+			{
+				WaitSemaphoreCount = (uint)signalSemaphores.Length,
+				WaitSemaphores = signalSemaphores,
+				Swapchains = new[] { _swapchain },
+				SwapchainCount = 1,
+				ImageIndices = new[] { imageIndex },
+			};
+
+			_presentQueue!.PresentKHR(presentInfo);
+
+			_curFrame = (_curFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+		}
+		catch(Vulkan.ResultException ex)
 		{
-			WaitSemaphoreCount = (uint)signalSemaphores.Length,
-			WaitSemaphores = signalSemaphores,
-			Swapchains = new[] { _swapchain },
-			SwapchainCount = 1,
-			ImageIndices = new[] { imageIndex },
-		};
+			Console.WriteLine($"Failed to acquire next image {ex.Result}, recreating swapchain");
+			RecreateSwapchain(_device!, _physicalDevice!, _surface!, _renderPass!);
 
-		_presentQueue!.PresentKHR(presentInfo);
-
-		_curFrame = (_curFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+		}
 	}
 
 	#endregion Drawing
@@ -519,14 +539,31 @@ public class MeteoraApp : IDisposable
 
 	#region Swap chain
 
-	private (SwapchainKhr swapchain, Format format, Extent2D extent) CreateSwapChain(PhysicalDevice physicalDevice, SurfaceKhr surface, Device device)
+	private void RecreateSwapchain(Device device, PhysicalDevice physicalDevice, SurfaceKhr surface, RenderPass renderPass)
 	{
+		var (width, height) = _window.GetFrameBufferSize();
+		while(width == 0 || height == 0)
+		{
+			(width, height) = _window.GetFrameBufferSize();
+			_window.WaitEvents();
+		}
+		device.WaitIdle();
+
+		(_swapchain, _curSwapChainFormat, _curSwapChainExtent) = CreateSwapChain(physicalDevice, surface, device);
+		_swapImages = device.GetSwapchainImagesKHR(_swapchain);
+		_swapchainImageViews = CreateImageViews(device, _swapImages);
+		_framebuffers = CreateFrameBuffers(device, _swapchainImageViews, renderPass, _curSwapChainExtent);
+	}
+
+	private (SwapchainKhr swapchain, Format format, Extent2D extent) CreateSwapChain(PhysicalDevice physicalDevice, SurfaceKhr surface, Device device, SwapchainKhr? oldSwapchain = null)
+	{
+		var (width, height) = _window.GetFrameBufferSize();
+
 		var swapSupport = physicalDevice.QuerySwapChainSupport(surface);
 
 		var format = swapSupport.ChooseSwapSurfaceFormat();
 		var presentMode = swapSupport.ChooseSwapPresentMode();
 
-		var (width, height) = _window.GetFrameBufferSize();
 		var extent = swapSupport.ChooseSwapExtent(width, height);
 
 		var imgCount = swapSupport.capabilities.MinImageCount + 1;
@@ -561,8 +598,11 @@ public class MeteoraApp : IDisposable
 		{
 			createInfo.ImageSharingMode = SharingMode.Exclusive;
 		}
+		createInfo.OldSwapchain = oldSwapchain;
 
 		var swapchain = device.CreateSwapchainKHR(createInfo);
+		if (oldSwapchain != null)
+			CleanupSwapchain();
 
 		return (swapchain, format.Format, extent);
 	}
@@ -640,13 +680,29 @@ public class MeteoraApp : IDisposable
 		var start = DateTime.Now;
 		while (!_window.ShouldClose)
 		{
+			try
+			{
+
 			_window.PollEvents();
+			if (_needResize)
+			{
+				_device!.WaitIdle();
+				RecreateSwapchain(_device!, _physicalDevice!, _surface!, _renderPass!);
+				_needResize = false;
+				continue;
+			}
 			var delta = (DateTime.Now - start);
 			var deltaS = delta.TotalSeconds;
 			DrawFrame(deltaS);
 			start = DateTime.Now;
 
 			_window.SetTitle($"FT: {delta.TotalMilliseconds:00.000}ms {(int)(1f / deltaS)} fps");
+			}
+			catch (ResultException ex)
+			{
+				Console.WriteLine($"Fatal Error: {ex.Result}");
+				break;
+			}
 		}
 		_device!.WaitIdle();
 	}
@@ -693,6 +749,7 @@ public class MeteoraApp : IDisposable
 
 	private void CleanupSwapchain()
 	{
+		Console.WriteLine("Cleaning up swapchain");
 		for (int i = 0; i < _framebuffers.Length; i++)
 			_device?.DestroyFramebuffer(_framebuffers[i]);
 		for (int i = 0; i < _swapchainImageViews.Length; i++)
@@ -715,7 +772,7 @@ public class MeteoraApp : IDisposable
 			_device?.DestroyFence(fence);
 		if (_commandPool != null)
 			_device?.DestroyCommandPool(_commandPool);
-		
+
 		foreach (var shader in _shaderModules)
 			_device?.DestroyShaderModule(shader);
 
@@ -727,7 +784,7 @@ public class MeteoraApp : IDisposable
 			_device?.DestroyPipelineLayout(_pipelineLayout);
 		if (_renderPass != null)
 			_device?.DestroyRenderPass(_renderPass);
-		
+
 		if (_surface != null)
 			_instance?.DestroySurfaceKHR(_surface);
 
